@@ -1,0 +1,119 @@
+# Environment variables
+.env
+.env.local
+.env.production
+.env.staging
+env_example.txt
+
+# Credentials and API keys (IMPORTANT FOR SECURITY)
+credentials/
+*.json
+service-account-key.json
+google-credentials.json
+google-service-account.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+myenv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite3
+
+# Temporary files
+*.tmp
+*.temp
+
+# ===== PROJECT SPECIFIC =====
+
+# Excel files and reports
+*.xlsx
+*.xls
+reports/
+scans/
+guard_scan_reports.xlsx
+
+# QR Code images
+qr_codes/
+*.png
+*.jpg
+*.jpeg
+
+# Backup files
+*.bak
+*.backup
+*_backup.py
+*_old.py
+*_simple_backup.py
+
+# Local development
+local_config.py
+dev_settings.py
+
+# Upload directories
+uploads/
+files/
+
+# Local storage
+storage/
+data/
+
+# Generated files
+generated/
+output/
+
+# Test files
+test_*.py
+tests/
+
+# Cache
+.cache/
+cache/
+.pytest_cache/ 
