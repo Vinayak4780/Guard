@@ -223,10 +223,15 @@ async def get_configuration():
 
 
 if __name__ == "__main__":
+    import os
+    host = os.getenv("HOST", "0.0.0.0")  # 👈 bind externally in containers
+    port = int(os.getenv("PORT", "8000"))  # 👈 Render provides PORT
+    reload_flag = settings.DEBUG and host in ("127.0.0.1", "localhost")
     uvicorn.run(
         "main:app",
-        host=settings.HOST,
-        port=settings.PORT,
-        reload=settings.DEBUG,
+        host=host,
+        port=port,
+        reload=reload_flag,      # avoid reload in prod
         log_level="info"
     )
+
