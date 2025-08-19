@@ -23,7 +23,7 @@ pydantic-settings==2.1.0
 
 # QR Code Generation
 qrcode[pil]==7.4.2
-Pillow==10.1.0
+Pillow==12.0.0
 
 # Date/Time handling
 python-dateutil==2.8.2
