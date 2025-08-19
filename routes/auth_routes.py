@@ -1,12 +1,12 @@
 """
-Authentication routes for Email-OTP signup, login, and JWT token management
-Supports signup with email verification, login with JWT tokens, and password reset
+Authentication routes for Email-OTP signup and verification
+Supports signup with email verification and password reset
 """
 
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Form
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 import logging
 from bson import ObjectId
@@ -14,18 +14,18 @@ from bson import ObjectId
 # Import services and dependencies
 from services.jwt_service import jwt_service
 from services.email_service import email_service
-from services.auth_service import get_current_user, revoke_user_tokens, create_access_token_data
+from services.auth_service import get_current_user
 from database import (
     get_users_collection, get_supervisors_collection, get_guards_collection,
-    get_otp_tokens_collection, get_refresh_tokens_collection
+    get_otp_tokens_collection
 )
 from config import settings
 
 # Import models
 from models import (
-    SignupRequest, VerifyOTPRequest, LoginRequest, 
+    SignupRequest, VerifyOTPRequest, LoginRequest,
     ResetPasswordRequest, ResetPasswordConfirmRequest,
-    LoginResponse, TokenResponse, UserResponse, SuccessResponse,
+    SuccessResponse, UserResponse,
     UserRole, OTPPurpose
 )
 
@@ -49,7 +49,7 @@ async def generate_and_send_otp(email: str, purpose: OTPPurpose) -> bool:
     try:
         # Check rate limiting - allow one OTP per minute per email
         otp_collection = get_otp_tokens_collection()
-        if not otp_collection:
+        if otp_collection is None:
             return False
         
         # Check for recent OTP requests
@@ -106,6 +106,68 @@ async def generate_and_send_otp(email: str, purpose: OTPPurpose) -> bool:
         return False
 
 
+async def verify_otp_code_only(otp: str, purpose: OTPPurpose) -> Optional[str]:
+    """
+    Verify OTP code and return the associated email
+    
+    Args:
+        otp: OTP code to verify
+        purpose: OTP purpose (SIGNUP or RESET)
+        
+    Returns:
+        Email address if OTP is valid, None otherwise
+    """
+    try:
+        logger.info(f"verify_otp_code_only called with OTP: {otp}, purpose: {purpose.value}")
+        
+        otp_collection = get_otp_tokens_collection()
+        if otp_collection is None:
+            logger.error("OTP collection is None")
+            return None
+        
+        # Find OTP record by purpose only (since we don't have email)
+        otp_records = await otp_collection.find({"purpose": purpose.value}).to_list(None)
+        logger.info(f"Found {len(otp_records)} OTP records for purpose: {purpose.value}")
+        
+        for otp_record in otp_records:
+            logger.info(f"Checking OTP record for email: {otp_record.get('email')}")
+            
+            # Check if OTP has expired
+            if datetime.utcnow() > otp_record["expiresAt"]:
+                logger.info(f"OTP expired for {otp_record.get('email')}, deleting...")
+                await otp_collection.delete_one({"_id": otp_record["_id"]})
+                continue
+            
+            # Check attempt limit
+            if otp_record["attempts"] >= settings.OTP_MAX_ATTEMPTS:
+                logger.info(f"OTP max attempts reached for {otp_record.get('email')}, deleting...")
+                await otp_collection.delete_one({"_id": otp_record["_id"]})
+                continue
+            
+            # Verify OTP
+            logger.info(f"Verifying OTP against stored hash...")
+            if jwt_service.verify_otp(otp, otp_record["otpHash"]):
+                # OTP is valid - remove it and return email
+                email = otp_record["email"]
+                logger.info(f"OTP verified successfully for email: {email}")
+                await otp_collection.delete_one({"_id": otp_record["_id"]})
+                return email
+            else:
+                logger.info(f"OTP verification failed, incrementing attempts...")
+                # Increment attempt counter for this record
+                await otp_collection.update_one(
+                    {"_id": otp_record["_id"]},
+                    {"$inc": {"attempts": 1}}
+                )
+        
+        logger.warning(f"No valid OTP found for code: {otp}")
+        return None
+            
+    except Exception as e:
+        logger.error(f"Failed to verify OTP: {e}")
+        return None
+
+
 async def verify_otp_code(email: str, otp: str, purpose: OTPPurpose) -> bool:
     """
     Verify OTP code against stored hash
@@ -120,7 +182,7 @@ async def verify_otp_code(email: str, otp: str, purpose: OTPPurpose) -> bool:
     """
     try:
         otp_collection = get_otp_tokens_collection()
-        if not otp_collection:
+        if otp_collection is None:
             return False
         
         # Find OTP record
@@ -173,7 +235,7 @@ async def signup(signup_data: SignupRequest):
     """
     try:
         users_collection = get_users_collection()
-        if not users_collection:
+        if users_collection is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database not available"
@@ -232,113 +294,69 @@ async def signup(signup_data: SignupRequest):
         )
 
 
-@auth_router.post("/verify-otp", response_model=LoginResponse)
+@auth_router.post("/verify-otp")
 async def verify_otp(verify_data: VerifyOTPRequest):
     """
-    Verify OTP and activate user account
-    Returns JWT tokens upon successful verification
+    Verify OTP and activate user account - MINIMAL VERSION
     """
     try:
-        # Verify OTP
-        otp_valid = await verify_otp_code(verify_data.email, verify_data.otp, OTPPurpose.SIGNUP)
+        logger.info(f"=== MINIMAL OTP VERIFICATION START ===")
+        logger.info(f"OTP received: {verify_data.otp}")
         
-        if not otp_valid:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid or expired OTP"
-            )
+        # Step 1: Verify OTP
+        email = await verify_otp_code_only(verify_data.otp, OTPPurpose.SIGNUP)
+        logger.info(f"Email from OTP verification: {email}")
         
+        if not email:
+            return {"error": "Invalid or expired OTP"}
+        
+        # Step 2: Get user and activate
         users_collection = get_users_collection()
-        if not users_collection:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database not available"
-            )
+        if users_collection is None:
+            return {"error": "Database not available"}
         
-        # Activate user account
         user = await users_collection.find_one_and_update(
-            {"email": verify_data.email, "isActive": False},
-            {
-                "$set": {
-                    "isActive": True,
-                    "updatedAt": datetime.utcnow(),
-                    "lastLogin": datetime.utcnow()
-                }
-            },
+            {"email": email, "isActive": False},
+            {"$set": {"isActive": True}},
             return_document=True
         )
         
         if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found or already activated"
-            )
+            return {"error": "User not found or already activated"}
         
-        # Create supervisor/guard record if needed
-        await create_role_specific_record(user)
+        # Step 3: Return minimal success response
+        logger.info(f"=== SUCCESS: User {email} activated ===")
+        return {
+            "success": True,
+            "message": "OTP verified successfully!",
+            "email": email,
+            "name": user.get("name", ""),
+            "role": user.get("role", "")
+        }
         
-        # Generate JWT tokens
-        token_data = create_access_token_data(user)
-        access_token = jwt_service.create_access_token(token_data)
-        refresh_token = jwt_service.create_refresh_token(str(user["_id"]))
-        
-        # Store refresh token in database
-        await store_refresh_token(str(user["_id"]), refresh_token)
-        
-        # Send welcome email
-        await email_service.send_welcome_email(user["email"], user["name"], user["role"])
-        
-        # Prepare response
-        user_response = UserResponse(
-            id=str(user["_id"]),
-            email=user["email"],
-            name=user["name"],
-            role=UserRole(user["role"]),
-            areaCity=user.get("areaCity"),
-            isActive=user["isActive"],
-            createdAt=user["createdAt"],
-            updatedAt=user["updatedAt"],
-            lastLogin=user.get("lastLogin")
-        )
-        
-        tokens = TokenResponse(
-            accessToken=access_token,
-            refreshToken=refresh_token,
-            expiresIn=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
-        )
-        
-        return LoginResponse(
-            user=user_response,
-            tokens=tokens,
-            message="Email verified successfully! Welcome to Guard Management System."
-        )
-        
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"OTP verification error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error during verification"
-        )
+        logger.error(f"=== ERROR in minimal verification: {str(e)} ===")
+        import traceback
+        logger.error(f"=== TRACEBACK: {traceback.format_exc()} ===")
+        return {"error": f"Verification failed: {str(e)}"}
 
 
-@auth_router.post("/login", response_model=LoginResponse)
-async def login(login_data: LoginRequest):
+@auth_router.post("/login")
+async def login(username: str = Form(...), password: str = Form(...)):
     """
-    Login with email and password
-    Returns JWT tokens for authenticated users
+    OAuth2 compatible login with username (email) and password
+    Accepts form data for OAuth2 password flow compatibility
     """
     try:
         users_collection = get_users_collection()
-        if not users_collection:
+        if users_collection is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database not available"
             )
         
-        # Find user by email
-        user = await users_collection.find_one({"email": login_data.email})
+        # Find user by email (username field contains email)
+        user = await users_collection.find_one({"email": username})
         
         if not user:
             raise HTTPException(
@@ -347,7 +365,7 @@ async def login(login_data: LoginRequest):
             )
         
         # Check password
-        if not jwt_service.verify_password(login_data.password, user["passwordHash"]):
+        if not jwt_service.verify_password(password, user["passwordHash"]):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid email or password"
@@ -367,38 +385,27 @@ async def login(login_data: LoginRequest):
         )
         user["lastLogin"] = datetime.utcnow()
         
-        # Generate JWT tokens
-        token_data = create_access_token_data(user)
-        access_token = jwt_service.create_access_token(token_data)
-        refresh_token = jwt_service.create_refresh_token(str(user["_id"]))
+        # Create proper JWT access token
+        access_token = jwt_service.create_access_token({
+            "user_id": str(user["_id"]),
+            "email": user["email"],
+            "role": user["role"]
+        })
         
-        # Store refresh token in database
-        await store_refresh_token(str(user["_id"]), refresh_token)
-        
-        # Prepare response
-        user_response = UserResponse(
-            id=str(user["_id"]),
-            email=user["email"],
-            name=user["name"],
-            role=UserRole(user["role"]),
-            areaCity=user.get("areaCity"),
-            isActive=user["isActive"],
-            createdAt=user["createdAt"],
-            updatedAt=user["updatedAt"],
-            lastLogin=user.get("lastLogin")
-        )
-        
-        tokens = TokenResponse(
-            accessToken=access_token,
-            refreshToken=refresh_token,
-            expiresIn=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
-        )
-        
-        return LoginResponse(
-            user=user_response,
-            tokens=tokens,
-            message="Login successful"
-        )
+        # Return OAuth2 compatible response with access_token
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": str(user["_id"]),
+                "email": user["email"],
+                "name": user["name"],
+                "role": user["role"],
+                "areaCity": user.get("areaCity"),
+                "isActive": user["isActive"],
+                "lastLogin": user.get("lastLogin")
+            }
+        }
         
     except HTTPException:
         raise
@@ -410,169 +417,6 @@ async def login(login_data: LoginRequest):
         )
 
 
-@auth_router.post("/token")
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    """
-    OAuth2 compatible login endpoint for Swagger UI Authorize button
-    Use your email as username and your password
-    """
-    try:
-        users_collection = get_users_collection()
-        if not users_collection:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database not available"
-            )
-        
-        # Find user by email (form_data.username contains the email)
-        user = await users_collection.find_one({"email": form_data.username})
-        
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid email or password",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        
-        # Check password
-        if not jwt_service.verify_password(form_data.password, user["passwordHash"]):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid email or password",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        
-        # Check if user is active
-        if not user.get("isActive", False):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Account not activated. Please verify your email first.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        
-        # Update last login
-        await users_collection.update_one(
-            {"_id": user["_id"]},
-            {"$set": {"lastLogin": datetime.utcnow()}}
-        )
-        
-        # Generate JWT token
-        token_data = create_access_token_data(user)
-        access_token = jwt_service.create_access_token(token_data)
-        
-        # Return OAuth2 compatible response
-        return {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-            "user_role": user.get("role"),
-            "user_email": user.get("email")
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"OAuth2 login error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error during login"
-        )
-
-
-@auth_router.post("/logout", response_model=SuccessResponse)
-async def logout(current_user: Dict[str, Any] = Depends(get_current_user)):
-    """
-    Logout user by revoking all refresh tokens
-    """
-    try:
-        user_id = str(current_user["_id"])
-        success = await revoke_user_tokens(user_id)
-        
-        if success:
-            return SuccessResponse(message="Logout successful")
-        else:
-            return SuccessResponse(message="Logout completed (some tokens may still be valid until expiry)")
-            
-    except Exception as e:
-        logger.error(f"Logout error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error during logout"
-        )
-
-
-@auth_router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(refresh_token: str):
-    """
-    Refresh access token using refresh token
-    """
-    try:
-        # Verify refresh token
-        payload = jwt_service.verify_token(refresh_token, "refresh")
-        if not payload:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired refresh token"
-            )
-        
-        user_id = payload.get("user_id")
-        if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token payload"
-            )
-        
-        # Check if refresh token is valid in database
-        refresh_tokens_collection = get_refresh_tokens_collection()
-        if refresh_tokens_collection:
-            token_hash = jwt_service.generate_refresh_token_hash(refresh_token)
-            stored_token = await refresh_tokens_collection.find_one({
-                "tokenHash": token_hash,
-                "userId": user_id,
-                "revoked": False
-            })
-            
-            if not stored_token:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Refresh token has been revoked"
-                )
-        
-        # Get user data
-        users_collection = get_users_collection()
-        if not users_collection:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Database not available"
-            )
-        
-        user = await users_collection.find_one({"_id": ObjectId(user_id)})
-        if not user or not user.get("isActive", False):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found or inactive"
-            )
-        
-        # Generate new access token
-        token_data = create_access_token_data(user)
-        new_access_token = jwt_service.create_access_token(token_data)
-        
-        return TokenResponse(
-            accessToken=new_access_token,
-            refreshToken=refresh_token,  # Keep same refresh token
-            expiresIn=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Token refresh error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error during token refresh"
-        )
-
-
 @auth_router.post("/reset-password", response_model=SuccessResponse)
 async def reset_password(reset_data: ResetPasswordRequest):
     """
@@ -580,7 +424,7 @@ async def reset_password(reset_data: ResetPasswordRequest):
     """
     try:
         users_collection = get_users_collection()
-        if not users_collection:
+        if users_collection is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database not available"
@@ -637,7 +481,7 @@ async def reset_password_confirm(reset_data: ResetPasswordConfirmRequest):
             )
         
         users_collection = get_users_collection()
-        if not users_collection:
+        if users_collection is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database not available"
@@ -662,13 +506,10 @@ async def reset_password_confirm(reset_data: ResetPasswordConfirmRequest):
                 detail="User not found"
             )
         
-        # Revoke all refresh tokens for security
-        user = await users_collection.find_one({"email": reset_data.email})
-        if user:
-            await revoke_user_tokens(str(user["_id"]))
+        # Note: No need to revoke refresh tokens since we don't use them anymore
         
         return SuccessResponse(
-            message="Password reset successful! Please login with your new password."
+            message="Password reset successful!"
         )
         
     except HTTPException:
@@ -734,7 +575,10 @@ async def resend_otp(email: str, purpose: str = "signup"):
 async def create_role_specific_record(user: Dict[str, Any]):
     """Create supervisor or guard record based on user role"""
     try:
-        if user["role"] == UserRole.SUPERVISOR:
+        user_role = user["role"]
+        logger.info(f"Creating role-specific record for role: {user_role}")
+        
+        if user_role == UserRole.SUPERVISOR.value or user_role == "SUPERVISOR":
             supervisors_collection = get_supervisors_collection()
             if supervisors_collection:
                 # Generate supervisor code
@@ -752,7 +596,7 @@ async def create_role_specific_record(user: Dict[str, Any]):
                 await supervisors_collection.insert_one(supervisor_data)
                 logger.info(f"Created supervisor record: {supervisor_code}")
         
-        elif user["role"] == UserRole.GUARD:
+        elif user_role == UserRole.GUARD.value or user_role == "GUARD":
             guards_collection = get_guards_collection()
             if guards_collection:
                 # Note: supervisorId should be set when admin assigns guard to supervisor
@@ -770,30 +614,11 @@ async def create_role_specific_record(user: Dict[str, Any]):
                 
                 await guards_collection.insert_one(guard_data)
                 logger.info(f"Created guard record: {employee_code}")
+        else:
+            logger.info(f"No role-specific record needed for role: {user_role}")
                 
     except Exception as e:
         logger.error(f"Failed to create role-specific record: {e}")
+        # Don't raise exception, just log it so verification can continue
 
 
-async def store_refresh_token(user_id: str, refresh_token: str):
-    """Store refresh token in database"""
-    try:
-        refresh_tokens_collection = get_refresh_tokens_collection()
-        if not refresh_tokens_collection:
-            return
-        
-        token_hash = jwt_service.generate_refresh_token_hash(refresh_token)
-        expires_at = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-        
-        token_data = {
-            "userId": user_id,
-            "tokenHash": token_hash,
-            "expiresAt": expires_at,
-            "revoked": False,
-            "createdAt": datetime.utcnow()
-        }
-        
-        await refresh_tokens_collection.insert_one(token_data)
-        
-    except Exception as e:
-        logger.error(f"Failed to store refresh token: {e}")
