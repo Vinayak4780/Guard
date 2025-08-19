@@ -4,7 +4,7 @@ Handles JWT token validation and role-based access control
 """
 
 from fastapi import Depends, HTTPException, status, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import OAuth2PasswordBearer
 from typing import Optional, Dict, Any
 import logging
 from datetime import datetime
@@ -15,8 +15,8 @@ from models import UserRole, UserResponse
 
 logger = logging.getLogger(__name__)
 
-# Security scheme for JWT Bearer tokens
-security = HTTPBearer(auto_error=False)
+# OAuth2 scheme for JWT Bearer tokens (matches FastAPI docs integration)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 
 class AuthenticationError(HTTPException):
@@ -38,12 +38,12 @@ class AuthorizationError(HTTPException):
         )
 
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
     """
     Get current authenticated user from JWT token
     
     Args:
-        credentials: HTTP Authorization credentials
+        token: JWT token from OAuth2 scheme
         
     Returns:
         User document from database
@@ -51,10 +51,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     Raises:
         AuthenticationError: If token is invalid or user not found
     """
-    if not credentials:
+    if not token:
         raise AuthenticationError("Authentication required")
-    
-    token = credentials.credentials
     
     # Verify JWT token
     payload = jwt_service.verify_token(token, "access")
@@ -67,13 +65,20 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     
     # Get user from database
     users_collection = get_users_collection()
-    if not users_collection:
+    if users_collection is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database not available"
         )
     
-    user = await users_collection.find_one({"_id": user_id})
+    # Convert string user_id to ObjectId for database query
+    from bson import ObjectId
+    try:
+        user_object_id = ObjectId(user_id)
+    except Exception:
+        raise AuthenticationError("Invalid user ID format")
+    
+    user = await users_collection.find_one({"_id": user_object_id})
     if not user:
         raise AuthenticationError("User not found")
     
@@ -178,7 +183,7 @@ async def get_supervisor_with_details(current_user: Dict[str, Any] = Depends(get
         User document with supervisor details
     """
     supervisors_collection = get_supervisors_collection()
-    if not supervisors_collection:
+    if supervisors_collection is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database not available"
@@ -207,7 +212,7 @@ async def get_guard_with_details(current_user: Dict[str, Any] = Depends(get_curr
         User document with guard details
     """
     guards_collection = get_guards_collection()
-    if not guards_collection:
+    if guards_collection is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database not available"
@@ -226,21 +231,21 @@ async def get_guard_with_details(current_user: Dict[str, Any] = Depends(get_curr
 
 
 # Optional authentication (for some endpoints that work with or without auth)
-async def get_current_user_optional(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[Dict[str, Any]]:
+async def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme)) -> Optional[Dict[str, Any]]:
     """
     Get current user if token is provided, otherwise return None
     
     Args:
-        credentials: Optional HTTP Authorization credentials
+        token: Optional JWT token from OAuth2 scheme
         
     Returns:
         User document if authenticated, None otherwise
     """
-    if not credentials:
+    if not token:
         return None
     
     try:
-        return await get_current_user(credentials)
+        return await get_current_user(token)
     except HTTPException:
         return None
 
@@ -304,7 +309,7 @@ async def revoke_user_tokens(user_id: str) -> bool:
         from database import get_refresh_tokens_collection
         
         refresh_tokens_collection = get_refresh_tokens_collection()
-        if not refresh_tokens_collection:
+        if refresh_tokens_collection is None:
             return False
         
         # Mark all user's refresh tokens as revoked
