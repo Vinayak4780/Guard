@@ -14,6 +14,7 @@ from bson import ObjectId
 # Import services and dependencies
 from services.auth_service import get_current_supervisor
 from services.tomtom_service import tomtom_service
+#from services.excel_service import excel_service
 from database import (
     get_supervisors_collection, get_guards_collection, get_qr_locations_collection,
     get_scan_events_collection, get_users_collection
