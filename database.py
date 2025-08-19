@@ -33,9 +33,7 @@ async def init_database():
             settings.MONGO_URL,
             serverSelectionTimeoutMS=5000,
             connectTimeoutMS=10000,
-            maxPoolSize=50,
-            ssl=True,
-            tlsAllowInvalidCertificates=True
+            maxPoolSize=50
         )
         database = client[settings.DATABASE_NAME]
         
@@ -60,6 +58,39 @@ async def init_database():
         database = None
 
 
+async def cleanup_old_indexes():
+    """Remove old/conflicting database indexes"""
+    if database is None:
+        return
+        
+    try:
+        # Remove old username index that conflicts
+        try:
+            await database.users.drop_index("username_1")
+            logger.info("🔄 Dropped old username index")
+        except Exception:
+            pass  # Index might not exist
+        
+        # Remove any other conflicting indexes
+        try:
+            existing_indexes = await database.users.list_indexes().to_list(length=None)
+            for index in existing_indexes:
+                index_name = index.get('name', '')
+                if 'username' in index_name and index_name != '_id_':
+                    try:
+                        await database.users.drop_index(index_name)
+                        logger.info(f"🔄 Dropped conflicting index: {index_name}")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+            
+        logger.info("✅ Old indexes cleanup completed")
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to cleanup old indexes: {e}")
+
+
 async def create_indexes():
     """Create database indexes for better performance"""
     if database is None:
@@ -67,6 +98,9 @@ async def create_indexes():
         return
         
     try:
+        # Clean up old indexes that might conflict
+        await cleanup_old_indexes()
+        
         # Users collection indexes
         await database.users.create_index("email", unique=True)
         await database.users.create_index([("role", 1), ("isActive", 1)])
