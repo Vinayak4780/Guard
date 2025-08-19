@@ -304,8 +304,7 @@ class SignupRequest(BaseModel):
 
 
 class VerifyOTPRequest(BaseModel):
-    """OTP verification request"""
-    email: EmailStr = Field(..., description="Email address")
+    """OTP verification request - only requires OTP code"""
     otp: str = Field(..., min_length=6, max_length=6, description="6-digit OTP")
 
 
