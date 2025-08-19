@@ -9,7 +9,11 @@ from contextlib import asynccontextmanager
 import uvicorn
 import logging
 import asyncio
+import warnings
 from datetime import datetime
+
+# Suppress bcrypt warnings
+warnings.filterwarnings("ignore", message=".*bcrypt.*", category=UserWarning)
 
 # Import configuration and services
 from config import settings
@@ -19,7 +23,7 @@ from services.google_drive_excel_service import google_drive_excel_service
 # Import routes
 from routes.auth_routes import auth_router
 from routes.admin_routes_working import admin_router
-from routes.supervisor_routes_full import supervisor_router
+from routes.supervisor_routes import supervisor_router
 from routes.guard_routes_simple import guard_router
 from routes.qr_routes_simple import qr_router
 
@@ -66,104 +70,15 @@ async def lifespan(app: FastAPI):
     await close_database()
 
 
-# Create FastAPI app with security configuration
-from fastapi.security import OAuth2PasswordBearer
+# Create FastAPI app 
 from fastapi.openapi.utils import get_openapi
 
 app = FastAPI(
     title="Guard Management System",
-    description="""
-    ## Guard Management System with Email-OTP Authentication
-    
-    A comprehensive guard patrol management system featuring:
-    
-    ### 🔐 Authentication
-    - **Email-Password Login**: Use your email and password in the Authorize button
-    - **JWT Tokens**: Access and refresh token system  
-    - **Password Reset**: Secure password reset via email OTP
-    - **Role-based Access**: ADMIN, SUPERVISOR, GUARD roles
-    
-    ### 📱 QR Code System - Camera Scanning Like Paytm
-    - **Mobile Camera Scanning**: Scan QR codes using phone camera like Paytm
-    - **Automatic QR Generation**: Create QR codes without manual coordinates
-    - **Smart ID Extraction**: Automatically extract QR ID from scanned content
-    - **Real-time GPS Capture**: Location automatically captured during scanning
-    - **Location Auto-Update**: QR coordinates updated on first guard scan
-    
-    ### 🌍 Location Services
-    - **TomTom Integration**: Reverse geocoding for human-readable addresses
-    - **Distance Validation**: Configurable radius checking for scans
-    - **POI Recognition**: Enhanced address with Point of Interest data
-    
-    ### 📊 Reporting & Google Drive Excel Integration
-    - **Automatic Logging**: All scans logged to Excel files in Google Drive
-    - **Real-time Updates**: Excel file updated every second
-    - **Supervisor Sheets**: Individual worksheets per supervisor
-    - **Cloud Storage**: Secure storage in Google Drive
-    
-    ### 🔒 Security Features
-    - **Rate Limiting**: OTP request rate limiting
-    - **Audit Trail**: Comprehensive logging of all actions
-    - **Soft Delete**: Safe user management
-    - **Token Management**: Secure refresh token rotation
-    
-    ## Quick Start
-    
-    1. **Signup**: POST `/auth/signup` with email, password, name, role
-    2. **Verify**: POST `/auth/verify-otp` with email and OTP from email
-    3. **Login**: POST `/auth/login` with email and password
-    4. **Use Token**: Include JWT in Authorization header: `Bearer <token>`
-    
-    ## User Roles
-    
-    ### 👨‍💼 ADMIN
-    - Create/manage supervisors and guards
-    - View area-wise reports
-    - Access all system data
-    - Configure system settings
-    
-    ### 👷‍♂️ SUPERVISOR  
-    - Manage assigned guards
-    - Create/update QR location (one permanent QR)
-    - View own area scans
-    - Download own data
-    
-    ### 👮‍♂️ GUARD
-    - Scan QR codes to mark attendance
-    - View own scan history
-    - Must be assigned to a supervisor
-    """,
-    version="2.0.0",
-    lifespan=lifespan,
-    openapi_tags=[
-        {
-            "name": "Authentication",
-            "description": "� Email-OTP signup, login, logout with JWT tokens",
-        },
-        {
-            "name": "Admin",
-            "description": "�‍💼 Administrative operations (ADMIN only)",
-        },
-        {
-            "name": "Supervisor", 
-            "description": "�‍♂️ Supervisor operations (SUPERVISOR/ADMIN)",
-        },
-        {
-            "name": "Guard",
-            "description": "�‍♂️ Guard operations (GUARD only)",
-        },
-        {
-            "name": "QR Management",
-            "description": "📱 QR code generation, scanning, and location management",
-        },
-        {
-            "name": "System",
-            "description": "⚙️ Health checks and system status",
-        }
-    ]
+    lifespan=lifespan
 )
 
-# Custom OpenAPI schema with OAuth2 password flow
+# Custom OpenAPI schema with OAuth2 username/password flow
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
@@ -176,13 +91,13 @@ def custom_openapi():
         tags=app.openapi_tags
     )
     
-    # Add OAuth2 password flow for Swagger UI Authorize button
+    # Add OAuth2 security scheme for username/password authentication
     openapi_schema["components"]["securitySchemes"] = {
         "OAuth2PasswordBearer": {
             "type": "oauth2",
             "flows": {
                 "password": {
-                    "tokenUrl": "/auth/token",
+                    "tokenUrl": "/auth/login",
                     "scopes": {}
                 }
             }
