@@ -26,27 +26,39 @@ async def get_guard_profile(current_guard: Dict[str, Any] = Depends(get_current_
     try:
         scan_events_collection = get_scan_events_collection()
         
-        if not scan_events_collection:
+        if scan_events_collection is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database not available"
             )
         
         guard_id = current_guard["_id"]
+        guard_email = current_guard.get("email", "")
         
-        # Get scan statistics
+        # Get scan statistics - use guardEmail to find scans
         today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
         today_scans = await scan_events_collection.count_documents({
-            "guardId": guard_id,
+            "guardEmail": guard_email,
             "scannedAt": {"$gte": today}
         })
         
         total_scans = await scan_events_collection.count_documents({
-            "guardId": guard_id
+            "guardEmail": guard_email
         })
         
+        # Convert ObjectId fields to strings for JSON serialization
+        guard_data = {
+            "_id": str(current_guard["_id"]),
+            "email": current_guard.get("email", ""),
+            "name": current_guard.get("name", ""),
+            "role": current_guard.get("role", ""),
+            "isActive": current_guard.get("isActive", True),
+            "createdAt": current_guard.get("createdAt"),
+            "lastLoginAt": current_guard.get("lastLoginAt")
+        }
+        
         return {
-            "guard": current_guard,
+            "guard": guard_data,
             "statistics": {
                 "today_scans": today_scans,
                 "total_scans": total_scans
@@ -73,7 +85,7 @@ async def get_guard_scans(
     try:
         scan_events_collection = get_scan_events_collection()
         
-        if not scan_events_collection:
+        if scan_events_collection is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database not available"
@@ -81,16 +93,34 @@ async def get_guard_scans(
         
         guard_id = current_guard["_id"]
         
-        # Get scans with pagination
+        # Get scans with pagination - look for guard's email instead of guardId
+        guard_email = current_guard.get("email", "")
+        
         scans_cursor = scan_events_collection.find(
-            {"guardId": guard_id}
+            {"guardEmail": guard_email}
         ).sort("scannedAt", -1).skip(skip).limit(limit)
         
         scans = []
         async for scan in scans_cursor:
             scan_data = {
-                **scan,
-                "_id": str(scan["_id"])
+                "_id": str(scan["_id"]),
+                "guardId": str(scan.get("guardId", "")),
+                "guardEmail": scan.get("guardEmail", ""),
+                "qrId": str(scan.get("qrId", "")),
+                "originalScanContent": scan.get("originalScanContent", ""),
+                "scannedAt": scan.get("scannedAt"),
+                "scannedLat": scan.get("deviceLat"),  # Map deviceLat to scannedLat
+                "scannedLng": scan.get("deviceLng"),  # Map deviceLng to scannedLng
+                "deviceLat": scan.get("deviceLat"),
+                "deviceLng": scan.get("deviceLng"),
+                "locationAddress": scan.get("address", ""),
+                "formatted_address": scan.get("formatted_address", ""),
+                "address_components": scan.get("address_components", {}),
+                "address_lookup_success": scan.get("address_lookup_success", False),
+                "timestamp": scan.get("timestampIST", ""),
+                "timestampIST": scan.get("timestampIST", ""),
+                "locationUpdated": scan.get("locationUpdated", False),
+                "status": scan.get("status", "")
             }
             scans.append(scan_data)
         
@@ -122,7 +152,7 @@ async def scan_qr_code(
         
         scan_events_collection = get_scan_events_collection()
         
-        if not scan_events_collection:
+        if scan_events_collection is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Database not available"
@@ -183,7 +213,7 @@ async def scan_qr_code(
         
         return {
             "message": "QR code scanned successfully",
-            "scan_id": scan_event["_id"],
+            "scan_id": str(scan_event["_id"]),
             "timestamp": timestamp_ist
         }
         
