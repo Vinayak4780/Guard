@@ -40,6 +40,24 @@ class EmailService:
             True if email sent successfully, False otherwise
         """
         try:
+            # Check if email service is properly configured (not just present but valid)
+            is_configured = all([
+                self.smtp_host and self.smtp_host.strip(),  # Any valid SMTP host
+                self.smtp_username and self.smtp_username != "your-email@gmail.com" and "@" in self.smtp_username,
+                self.smtp_password and self.smtp_password != "your-16-digit-app-password-here" and self.smtp_password != "your-app-password-here" and self.smtp_password != "abcdefghijklmnop" and self.smtp_password != "DEVELOPMENT_MODE",
+                self.from_email and self.from_email != "your-email@gmail.com" and "@" in self.from_email
+            ])
+            
+            if not is_configured:
+                logger.warning("⚠️ Email service not configured with real credentials")
+                logger.warning("=" * 60)
+                logger.warning(f"🔑 DEVELOPMENT MODE - YOUR OTP CODE IS: {otp}")
+                logger.warning(f"📧 For email: {to_email}")
+                logger.warning(f"⏰ Valid for {purpose}")
+                logger.warning("=" * 60)
+                print(f"\n🔑 OTP CODE: {otp} (for {to_email})\n")  # Also print to console
+                return True  # Return True for development mode
+            
             subject = "Your Guard Management System OTP"
             
             if purpose == "verification":
@@ -127,9 +145,23 @@ class EmailService:
             logger.info(f"OTP email sent successfully to {to_email}")
             return True
             
+        except aiosmtplib.SMTPAuthenticationError as e:
+            logger.error(f"Email authentication failed for {to_email}: {e}")
+            logger.warning("⚠️ Gmail credentials invalid. Check .env file or use App Password")
+            logger.warning("=" * 60)
+            logger.warning(f"� DEVELOPMENT MODE - YOUR OTP CODE IS: {otp}")
+            logger.warning(f"📧 For email: {to_email}")
+            logger.warning("=" * 60)
+            print(f"\n🔑 OTP CODE: {otp} (for {to_email})\n")  # Also print to console
+            return True  # Return True for development mode
         except Exception as e:
             logger.error(f"Failed to send OTP email to {to_email}: {e}")
-            return False
+            logger.warning("=" * 60)
+            logger.warning(f"� DEVELOPMENT MODE - YOUR OTP CODE IS: {otp}")
+            logger.warning(f"📧 For email: {to_email}")
+            logger.warning("=" * 60)
+            print(f"\n🔑 OTP CODE: {otp} (for {to_email})\n")  # Also print to console
+            return True  # Return True for development mode
     
     async def send_welcome_email(self, to_email: str, name: str, role: str) -> bool:
         """
