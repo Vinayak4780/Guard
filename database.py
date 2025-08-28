@@ -117,7 +117,11 @@ async def create_indexes():
         await database.guards.create_index("supervisorId")
         
         # QR Locations collection indexes
-        await database.qr_locations.create_index("supervisorId", unique=True)  # One QR per supervisor
+        await database.qr_locations.create_index(
+            [("organization", 1), ("site", 1), ("supervisorId", 1)],
+            unique=True,
+            name="org_site_supervisor_unique"
+        )
         await database.qr_locations.create_index([("lat", 1), ("lng", 1)])
         await database.qr_locations.create_index("active")
         
@@ -138,6 +142,11 @@ async def create_indexes():
         await database.refresh_tokens.create_index("tokenHash", unique=True)
         await database.refresh_tokens.create_index("revoked")
         # Note: expiresAt TTL index is created separately in create_ttl_indexes()
+        
+        # Building Sites collection indexes
+        await database.building_sites.create_index("building_name")
+        await database.building_sites.create_index("site_name")
+        await database.building_sites.create_index([("latitude", 1), ("longitude", 1)])
         
         logger.info("✅ Database indexes created successfully")
         
@@ -199,7 +208,8 @@ async def ensure_collections():
             "qr_locations",
             "scan_events",
             "otp_tokens",
-            "refresh_tokens"
+            "refresh_tokens",
+            "building_sites"
         ]
         
         existing_collections = await database.list_collection_names()
@@ -230,10 +240,14 @@ def get_database():
 
 def get_collection(collection_name: str):
     """Get a specific collection"""
-    db = get_database()
-    if db is None:
+    try:
+        db = get_database()
+        if db is None:
+            return None
+        return db[collection_name]
+    except Exception as e:
+        logger.error(f"Failed to get collection '{collection_name}': {e}")
         return None
-    return db[collection_name]
 
 
 # Collection getters for convenience
@@ -375,3 +389,28 @@ async def close_database():
     if client:
         client.close()
         logger.info("Database connection closed")
+
+
+async def create_building_sites_collection():
+    """
+    Create a collection for storing building names, sites, and their latitude/longitude.
+    """
+    if database is None:
+        logger.error("Database not initialized. Cannot create collection.")
+        return
+
+    try:
+        collection_name = "building_sites"
+        if collection_name not in await database.list_collection_names():
+            await database.create_collection(collection_name)
+            logger.info(f"Collection '{collection_name}' created successfully.")
+
+            # Create indexes for efficient querying
+            await database[collection_name].create_index("building_name")
+            await database[collection_name].create_index("site_name")
+            await database[collection_name].create_index([("latitude", 1), ("longitude", 1)])
+            logger.info(f"Indexes created for collection '{collection_name}'.")
+        else:
+            logger.info(f"Collection '{collection_name}' already exists.")
+    except Exception as e:
+        logger.error(f"Error creating collection '{collection_name}': {e}")
