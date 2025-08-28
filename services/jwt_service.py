@@ -12,11 +12,19 @@ import hashlib
 from config import settings
 from models import UserRole
 import logging
+import warnings
 
 logger = logging.getLogger(__name__)
 
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Suppress bcrypt version warnings
+warnings.filterwarnings("ignore", message=".*bcrypt.*", category=UserWarning)
+
+# Password hashing context with updated configuration
+pwd_context = CryptContext(
+    schemes=["bcrypt"], 
+    deprecated="auto",
+    bcrypt__rounds=12  # Specify rounds to avoid version issues
+)
 
 
 class JWTService:
