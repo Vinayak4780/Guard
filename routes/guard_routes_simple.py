@@ -168,6 +168,14 @@ async def scan_qr_code(
         scanned_at_ist = scanned_at.astimezone(ist_timezone)
         timestamp_ist = scanned_at_ist.strftime("%d-%m-%Y %H:%M:%S")
         
+        # Extract QR location information (mocked for now)
+        qr_location = {
+            "organization": "Guardians Inc.",
+            "site": "Main Entrance",
+            "lat": device_lat,
+            "lng": device_lng
+        }
+        
         scan_event = {
             "qrId": qr_id,
             "guardId": guard_id,
@@ -175,7 +183,12 @@ async def scan_qr_code(
             "deviceLng": device_lng,
             "scannedAt": scanned_at,
             "createdAt": datetime.utcnow(),
-            "timestampIST": timestamp_ist
+            "timestampIST": timestamp_ist,
+            # Add building and site info from QR location
+            "organization": qr_location.get("organization", "Unknown"),
+            "site": qr_location.get("site", "Unknown"),
+            "lat": qr_location.get("lat", device_lat),
+            "lng": qr_location.get("lng", device_lng)
         }
         
         # Insert scan event
