@@ -11,8 +11,6 @@ import logging
 import asyncio
 import warnings
 from datetime import datetime
-from fastapi.openapi.utils import get_openapi
-from fastapi import Response  
 
 # Suppress bcrypt warnings
 warnings.filterwarnings("ignore", message=".*bcrypt.*", category=UserWarning)
@@ -79,13 +77,6 @@ app = FastAPI(
     title="Guard Management System",
     lifespan=lifespan
 )
-@app.head("/", include_in_schema=False)
-async def root_head():
-    return Response(status_code=200)
-
-@app.head("/health", include_in_schema=False)
-async def health_head():
-    return Response(status_code=200)
 
 # Custom OpenAPI schema with OAuth2 username/password flow
 def custom_openapi():
