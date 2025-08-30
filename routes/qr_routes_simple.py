@@ -30,56 +30,6 @@ qr_router = APIRouter()
 # SUPERVISOR ENDPOINT - QR Generation (ONLY ESSENTIAL API)
 # ============================================================================
 
-# ============================================================================
-# NEW: QR Code Creation API (by organization and site)
-# ============================================================================
-from fastapi import Body
-
-@qr_router.post("/create")
-async def create_qr_code(
-    organization_name: str = Body(..., embed=True, description="Name of the building (company/college/etc.)"),
-    site_name: str = Body(..., embed=True, description="Site name (e.g., canteen, gate, etc.)"),
-    current_supervisor: Dict[str, Any] = Depends(get_current_supervisor)
-):
-    """
-    Create a QR code for a specific building and site.
-    Only supervisors can create QR codes.
-    """
-    qr_locations_collection = get_qr_locations_collection()
-    if qr_locations_collection is None:
-        raise HTTPException(status_code=503, detail="Database not available")
-
-    # Check for existing QR location for this organization, site, and supervisor
-    existing = await qr_locations_collection.find_one({
-        "organization": organization_name,
-        "site": site_name,
-        "supervisorId": current_supervisor["_id"]
-    })
-    if existing:
-        qr_id = str(existing["_id"])
-    else:
-        qr_data = {
-            "organization": organization_name,
-            "site": site_name,
-            "createdBy": str(current_supervisor["_id"]),
-            "createdAt": datetime.now(),
-            "supervisorId": current_supervisor["_id"]
-        }
-        result = await qr_locations_collection.insert_one(qr_data)
-        qr_id = str(result.inserted_id)
-
-    # Generate QR code with building, site, and QR id
-    import qrcode, io
-    from fastapi.responses import StreamingResponse
-
-    qr_content = f"{organization_name}:{site_name}:{qr_id}"
-    qr_img = qrcode.make(qr_content)
-    buf = io.BytesIO()
-    qr_img.save(buf, format="PNG")
-    buf.seek(0)
-
-    return StreamingResponse(buf, media_type="image/png")
-
 @qr_router.get("/my-qr-image")
 async def get_my_qr_image(
     current_supervisor: Dict[str, Any] = Depends(get_current_supervisor)
@@ -250,22 +200,10 @@ async def scan_qr_code(
         scanned_at_ist = scanned_at.astimezone(ist_timezone)
         timestamp_ist = scanned_at_ist.strftime("%d-%m-%Y %H:%M:%S")
         
-        # Fetch guard name from users collection
-        from database import get_users_collection
-        users_collection = get_users_collection()
-        guard_name = guard_email.split('@')[0]
-        try:
-            user = await users_collection.find_one({"email": guard_email})
-            if user and user.get("name"):
-                guard_name = user["name"]
-        except Exception as e:
-            logger.error(f"Error fetching guard name from users: {e}")
-
         scan_event = {
             "qrId": actual_qr_id,
             "originalScanContent": scanned_content,
             "guardEmail": guard_email,
-            "guardName": guard_name,
             "deviceLat": device_lat,
             "deviceLng": device_lng,
             "scannedAt": scanned_at,
@@ -276,13 +214,7 @@ async def scan_qr_code(
             "address": address_info.get("address", f"Location at {device_lat:.4f}, {device_lng:.4f}"),
             "formatted_address": address_info.get("formatted_address", ""),
             "address_components": address_info.get("components", {}),
-            "address_lookup_success": address_info.get("success", False),
-            # Add building and site info from QR location
-            "organization": qr_location.get("organization", "Unknown"),
-            "site": qr_location.get("site", "Unknown"),
-            "lat": qr_location.get("lat", device_lat),
-            "lng": qr_location.get("lng", device_lng),
-            "supervisorId": qr_location.get("supervisorId", None)
+            "address_lookup_success": address_info.get("success", False)
         }
         
         # Insert scan event
